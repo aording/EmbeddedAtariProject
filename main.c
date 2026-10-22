@@ -39,7 +39,7 @@ Graphics_Context g_sContext;
 #define BRICK_COLOR_1       GRAPHICS_COLOR_RED
 #define BRICK_COLOR_2       GRAPHICS_COLOR_YELLOW
 #define BRICK_COLOR_3       GRAPHICS_COLOR_GREEN
-#define BRICK_COLOR_4       GRAPHICS_COLOR_PURPLE
+#define BRICK_COLOR_4       GRAPHICS_COLOR_BLUE
 #define PADDLE_COLOR        GRAPHICS_COLOR_WHITE
 #define BALL_COLOR          GRAPHICS_COLOR_WHITE
 #define STATUS_COLOR        GRAPHICS_COLOR_WHITE
@@ -117,7 +117,7 @@ void advanceLevel(void);
 void resetBall(void);
 void loseLife(void);
 
-void updateBallOneStep(void);
+unsigned char updateBallOneStep(void);
 unsigned char getBallSteps(void);
 void updatePaddlePosition(void);
 
@@ -174,11 +174,10 @@ int main(void)
     // BUZ1 on P3.7
     initializeBuzzer();
 
-    // Start screen
     gameState = GAME_START;
     drawStartScreen();
 
-    // Timer_A game update at about 30 Hz
+    // Game update at about 30 Hz
     TA0CCR0 = 1092 - 1;
     TA0CCTL0 = CCIE;
     TA0CTL = TASSEL__ACLK | MC__UP | TACLR;
@@ -197,17 +196,14 @@ __interrupt void FIXED_UPDATE(void)
     unsigned char button;
     unsigned char steps;
     unsigned char step;
-
+    unsigned char screenChanged = 0;
     int old_ball_x;
     int old_ball_y;
 
-    // Progress any active sound
     updateSound();
 
-    // Read S2
     button = ((P4IN & S2) == 0);
 
-    // Start screen
     if (gameState == GAME_START)
     {
         if (button && !lastButton)
@@ -215,10 +211,7 @@ __interrupt void FIXED_UPDATE(void)
             startNewGame();
         }
     }
-
-    // Ready or running
-    else if ((gameState == GAME_READY) ||
-             (gameState == GAME_RUNNING))
+    else if ((gameState == GAME_READY) || (gameState == GAME_RUNNING))
     {
         updatePaddlePosition();
 
@@ -236,68 +229,50 @@ __interrupt void FIXED_UPDATE(void)
                     break;
                 }
 
-                updateBallOneStep();
+                if (updateBallOneStep())
+                {
+                    screenChanged = 1;
+                    break;
+                }
             }
         }
         else
         {
-            // Attach ball to paddle
             ball_x = paddle_x + PADDLE_WIDTH / 2;
             ball_y = PADDLE_Y - BALL_RADIUS - 1;
 
-            // Launch ball
             if (button && !lastButton)
             {
                 gameState = GAME_RUNNING;
-
                 ball_velocity_x = 1;
                 ball_velocity_y = -1;
-
                 ball_x += ball_velocity_x;
                 ball_y += ball_velocity_y;
             }
         }
 
-        if ((gameState == GAME_READY) ||
-            (gameState == GAME_RUNNING))
+        if (!screenChanged)
         {
-            eraseOldBallArea(
-                old_ball_x,
-                old_ball_y,
-                ball_x,
-                ball_y
-            );
-        }
+            if ((gameState == GAME_READY) || (gameState == GAME_RUNNING))
+            {
+                eraseOldBallArea(old_ball_x, old_ball_y, ball_x, ball_y);
+            }
 
-        // Repair status separator
-        if (old_ball_y + BALL_RADIUS >= STATUS_LINE_Y)
-        {
-            Graphics_setForegroundColor(
-                &g_sContext,
-                STATUS_COLOR
-            );
+            if (old_ball_y + BALL_RADIUS >= STATUS_LINE_Y)
+            {
+                Graphics_setForegroundColor(&g_sContext, STATUS_COLOR);
+                Graphics_drawLine(&g_sContext, 0, STATUS_LINE_Y, SCREEN_WIDTH - 1, STATUS_LINE_Y);
+            }
 
-            Graphics_drawLine(
-                &g_sContext,
-                0,
-                STATUS_LINE_Y,
-                SCREEN_WIDTH - 1,
-                STATUS_LINE_Y
-            );
-        }
+            drawPaddle();
 
-        drawPaddle();
-
-        if ((gameState == GAME_READY) ||
-            (gameState == GAME_RUNNING))
-        {
-            drawBall(ball_x, ball_y);
+            if ((gameState == GAME_READY) || (gameState == GAME_RUNNING))
+            {
+                drawBall(ball_x, ball_y);
+            }
         }
     }
-
-    // Restart after game over or win
-    else if ((gameState == GAME_OVER) ||
-             (gameState == GAME_WON))
+    else if ((gameState == GAME_OVER) || (gameState == GAME_WON))
     {
         if (button && !lastButton)
         {
@@ -308,7 +283,6 @@ __interrupt void FIXED_UPDATE(void)
     lastButton = button;
 }
 
-
 // Update paddle
 void updatePaddlePosition(void)
 {
@@ -318,8 +292,7 @@ void updatePaddlePosition(void)
 
     readADC();
 
-    filteredX =
-        (unsigned int)(((uint32_t)3 * filteredX + Xoutput) / 4);
+    filteredX = (unsigned int)(((uint32_t)3 * filteredX + Xoutput) / 4);
 
     if (filteredX < ADC_LEFT)
     {
@@ -331,9 +304,7 @@ void updatePaddlePosition(void)
         filteredX = ADC_RIGHT;
     }
 
-    mappedPosition =
-        ((uint32_t)(filteredX - ADC_LEFT) * PADDLE_MAX_X) /
-        (ADC_RIGHT - ADC_LEFT);
+    mappedPosition = ((uint32_t)(filteredX - ADC_LEFT) * PADDLE_MAX_X) / (ADC_RIGHT - ADC_LEFT);
 
     paddle_x = (unsigned int)mappedPosition;
 
@@ -344,11 +315,10 @@ void updatePaddlePosition(void)
 }
 
 
-// Erase area paddle moved away from
+// Erase old paddle area
 void eraseOldPaddleArea(unsigned int oldX, unsigned int newX)
 {
     Graphics_Rectangle eraseArea;
-
     unsigned int oldRight;
     unsigned int newRight;
 
@@ -358,12 +328,8 @@ void eraseOldPaddleArea(unsigned int oldX, unsigned int newX)
     eraseArea.yMin = PADDLE_Y;
     eraseArea.yMax = PADDLE_Y + PADDLE_HEIGHT - 1;
 
-    Graphics_setForegroundColor(
-        &g_sContext,
-        BACKGROUND_COLOR
-    );
+    Graphics_setForegroundColor(&g_sContext, BACKGROUND_COLOR);
 
-    // Paddle moved right
     if (newX > oldX)
     {
         eraseArea.xMin = oldX;
@@ -377,13 +343,8 @@ void eraseOldPaddleArea(unsigned int oldX, unsigned int newX)
             eraseArea.xMax = oldRight;
         }
 
-        Graphics_fillRectangle(
-            &g_sContext,
-            &eraseArea
-        );
+        Graphics_fillRectangle(&g_sContext, &eraseArea);
     }
-
-    // Paddle moved left
     else if (newX < oldX)
     {
         if (newRight >= oldX)
@@ -397,10 +358,7 @@ void eraseOldPaddleArea(unsigned int oldX, unsigned int newX)
 
         eraseArea.xMax = oldRight;
 
-        Graphics_fillRectangle(
-            &g_sContext,
-            &eraseArea
-        );
+        Graphics_fillRectangle(&g_sContext, &eraseArea);
     }
 }
 
@@ -415,72 +373,36 @@ void drawPaddle(void)
     paddle.yMin = PADDLE_Y;
     paddle.yMax = PADDLE_Y + PADDLE_HEIGHT - 1;
 
-    Graphics_setForegroundColor(
-        &g_sContext,
-        PADDLE_COLOR
-    );
-
-    Graphics_fillRectangle(
-        &g_sContext,
-        &paddle
-    );
+    Graphics_setForegroundColor(&g_sContext, PADDLE_COLOR);
+    Graphics_fillRectangle(&g_sContext, &paddle);
 }
 
 
-// Erase old ball and draw new ball
+// Erase old ball
 void eraseOldBallArea(int oldX, int oldY, int newX, int newY)
 {
-    Graphics_setForegroundColor(
-        &g_sContext,
-        BACKGROUND_COLOR
-    );
+    Graphics_setForegroundColor(&g_sContext, BACKGROUND_COLOR);
+    Graphics_fillCircle(&g_sContext, oldX, oldY, BALL_RADIUS);
 
-    Graphics_fillCircle(
-        &g_sContext,
-        oldX,
-        oldY,
-        BALL_RADIUS
-    );
-
-    Graphics_setForegroundColor(
-        &g_sContext,
-        BALL_COLOR
-    );
-
-    Graphics_fillCircle(
-        &g_sContext,
-        newX,
-        newY,
-        BALL_RADIUS
-    );
+    Graphics_setForegroundColor(&g_sContext, BALL_COLOR);
+    Graphics_fillCircle(&g_sContext, newX, newY, BALL_RADIUS);
 }
 
 
 // Draw ball
 void drawBall(int x, int y)
 {
-    Graphics_setForegroundColor(
-        &g_sContext,
-        BALL_COLOR
-    );
-
-    Graphics_fillCircle(
-        &g_sContext,
-        x,
-        y,
-        BALL_RADIUS
-    );
+    Graphics_setForegroundColor(&g_sContext, BALL_COLOR);
+    Graphics_fillCircle(&g_sContext, x, y, BALL_RADIUS);
 }
 
 
-// Move ball and detect collisions
-void updateBallOneStep(void)
+// Move ball and check collisions
+unsigned char updateBallOneStep(void)
 {
     Graphics_Rectangle paddle;
     Graphics_Rectangle ball;
-
     unsigned int i;
-
     int new_x;
     int new_y;
 
@@ -502,7 +424,6 @@ void updateBallOneStep(void)
     {
         ball_velocity_x = 1;
         new_x = BALL_RADIUS;
-
         playSound(SOUND_WALL);
     }
 
@@ -511,7 +432,6 @@ void updateBallOneStep(void)
     {
         ball_velocity_x = -1;
         new_x = SCREEN_WIDTH - BALL_RADIUS - 1;
-
         playSound(SOUND_WALL);
     }
 
@@ -520,7 +440,6 @@ void updateBallOneStep(void)
     {
         ball_velocity_y = 1;
         new_y = BALL_RADIUS;
-
         playSound(SOUND_WALL);
     }
 
@@ -543,8 +462,7 @@ void updateBallOneStep(void)
         {
             ball_velocity_x = -1;
         }
-        else if (new_x >
-                 paddle_x + (2 * PADDLE_WIDTH) / 3)
+        else if (new_x > paddle_x + (2 * PADDLE_WIDTH) / 3)
         {
             ball_velocity_x = 1;
         }
@@ -570,31 +488,18 @@ void updateBallOneStep(void)
             (ball.yMax >= bricks[i].rect.yMin) &&
             (ball.yMin <= bricks[i].rect.yMax))
         {
-            // Vertical collision
-            if ((ball_y + BALL_RADIUS <
-                 bricks[i].rect.yMin) ||
-                (ball_y - BALL_RADIUS >
-                 bricks[i].rect.yMax))
+            if ((ball_y + BALL_RADIUS < bricks[i].rect.yMin) ||
+                (ball_y - BALL_RADIUS > bricks[i].rect.yMax))
             {
                 ball_velocity_y = -ball_velocity_y;
             }
-
-            // Horizontal collision
             else
             {
                 ball_velocity_x = -ball_velocity_x;
             }
 
-            // Erase brick
-            Graphics_setForegroundColor(
-                &g_sContext,
-                BACKGROUND_COLOR
-            );
-
-            Graphics_fillRectangle(
-                &g_sContext,
-                &bricks[i].rect
-            );
+            Graphics_setForegroundColor(&g_sContext, BACKGROUND_COLOR);
+            Graphics_fillRectangle(&g_sContext, &bricks[i].rect);
 
             bricks[i].active = 0;
 
@@ -604,7 +509,6 @@ void updateBallOneStep(void)
             }
 
             playSound(SOUND_BRICK);
-
             break;
         }
     }
@@ -613,7 +517,7 @@ void updateBallOneStep(void)
     if (new_y - BALL_RADIUS > GAME_BOTTOM)
     {
         loseLife();
-        return;
+        return 1;
     }
 
     ball_x = new_x;
@@ -623,11 +527,14 @@ void updateBallOneStep(void)
     if (activeBricks == 0)
     {
         advanceLevel();
+        return 1;
     }
+
+    return 0;
 }
 
 
-// Ball speed by level
+// Ball speed
 unsigned char getBallSteps(void)
 {
     if (currentLevel == 1)
@@ -651,7 +558,7 @@ unsigned char getBallSteps(void)
 }
 
 
-// ADC initialization
+// ADC setup
 void initializeADC(void)
 {
     ADC12CTL0 &= ~ADC12ENC;
@@ -678,23 +585,21 @@ void readADC(void)
 }
 
 
-// Initialize BUZ1
+// Buzzer setup
 void initializeBuzzer(void)
 {
-    // P3.7 as GPIO output
     P3SEL0 &= ~BUZZER;
     P3SEL1 &= ~BUZZER;
 
     P3DIR |= BUZZER;
     P3OUT &= ~BUZZER;
 
-    // Timer_B stopped until a sound starts
     TB0CCTL0 = 0;
     TB0CTL = TBSSEL__ACLK | MC__STOP | TBCLR;
 }
 
 
-// Start one tone
+// Start tone
 void startTone(unsigned int period)
 {
     P3OUT &= ~BUZZER;
@@ -706,7 +611,7 @@ void startTone(unsigned int period)
 }
 
 
-// Stop current tone
+// Stop tone
 void stopTone(void)
 {
     TB0CTL = TBSSEL__ACLK | MC__STOP | TBCLR;
@@ -716,12 +621,10 @@ void stopTone(void)
 }
 
 
-// Request a sound
+// Request sound
 void playSound(unsigned char sound)
 {
-    // Protect ending sounds from collision sounds
-    if ((soundType == SOUND_GAME_OVER) ||
-        (soundType == SOUND_WIN))
+    if ((soundType == SOUND_GAME_OVER) || (soundType == SOUND_WIN))
     {
         return;
     }
@@ -734,7 +637,7 @@ void playSound(unsigned char sound)
 }
 
 
-// Update sound sequence
+// Update sound
 void updateSound(void)
 {
     if (soundType == SOUND_NONE)
@@ -755,7 +658,6 @@ void updateSound(void)
         soundNote++;
     }
 
-    // Wall
     if (soundType == SOUND_WALL)
     {
         if (soundNote == 0)
@@ -769,8 +671,6 @@ void updateSound(void)
             soundType = SOUND_NONE;
         }
     }
-
-    // Paddle
     else if (soundType == SOUND_PADDLE)
     {
         if (soundNote == 0)
@@ -784,8 +684,6 @@ void updateSound(void)
             soundType = SOUND_NONE;
         }
     }
-
-    // Brick
     else if (soundType == SOUND_BRICK)
     {
         if (soundNote == 0)
@@ -799,8 +697,6 @@ void updateSound(void)
             soundType = SOUND_NONE;
         }
     }
-
-    // Level complete
     else if (soundType == SOUND_LEVEL)
     {
         if (soundNote == 0)
@@ -824,8 +720,6 @@ void updateSound(void)
             soundType = SOUND_NONE;
         }
     }
-
-    // Game over
     else if (soundType == SOUND_GAME_OVER)
     {
         if (soundNote == 0)
@@ -849,8 +743,6 @@ void updateSound(void)
             soundType = SOUND_NONE;
         }
     }
-
-    // Game won
     else if (soundType == SOUND_WIN)
     {
         if (soundNote == 0)
@@ -882,7 +774,7 @@ void updateSound(void)
 }
 
 
-// Timer_B buzzer waveform
+// Buzzer waveform
 #pragma vector = TIMER0_B0_VECTOR
 __interrupt void BUZZER_UPDATE(void)
 {
@@ -903,36 +795,19 @@ void initializeLevel(unsigned char level)
     {
         for (column = 0; column < BRICK_COLUMNS; column++)
         {
-            bricks[i].rect.xMin =
-                BRICK_START_X +
-                column * (BRICK_WIDTH + BRICK_X_GAP);
+            bricks[i].rect.xMin = BRICK_START_X + column * (BRICK_WIDTH + BRICK_X_GAP);
+            bricks[i].rect.xMax = bricks[i].rect.xMin + BRICK_WIDTH - 1;
+            bricks[i].rect.yMin = BRICK_START_Y + row * (BRICK_HEIGHT + BRICK_Y_GAP);
+            bricks[i].rect.yMax = bricks[i].rect.yMin + BRICK_HEIGHT - 1;
 
-            bricks[i].rect.xMax =
-                bricks[i].rect.xMin +
-                BRICK_WIDTH - 1;
-
-            bricks[i].rect.yMin =
-                BRICK_START_Y +
-                row * (BRICK_HEIGHT + BRICK_Y_GAP);
-
-            bricks[i].rect.yMax =
-                bricks[i].rect.yMin +
-                BRICK_HEIGHT - 1;
-
-            // Level 1
             if (level == 1)
             {
                 bricks[i].active = 1;
             }
-
-            // Level 2
             else if (level == 2)
             {
-                bricks[i].active =
-                    (((row + column) % 2) == 0);
+                bricks[i].active = (((row + column) % 2) == 0);
             }
-
-            // Level 3
             else
             {
                 if ((row == 0) ||
@@ -998,13 +873,10 @@ void advanceLevel(void)
     {
         gameState = GAME_WON;
 
-        Graphics_clearDisplay(&g_sContext);
         drawEndMessage((const int8_t *)"YOU WIN");
-
         playSound(SOUND_WIN);
     }
 }
-
 
 // Reset ball
 void resetBall(void)
@@ -1029,9 +901,7 @@ void loseLife(void)
         lives = 0;
         gameState = GAME_OVER;
 
-        Graphics_clearDisplay(&g_sContext);
         drawEndMessage((const int8_t *)"GAME OVER");
-
         playSound(SOUND_GAME_OVER);
     }
     else
@@ -1041,58 +911,20 @@ void loseLife(void)
     }
 }
 
-
-// Draw start screen
+// Start screen
 void drawStartScreen(void)
 {
-    Graphics_setBackgroundColor(
-        &g_sContext,
-        BACKGROUND_COLOR
-    );
-
+    Graphics_setBackgroundColor(&g_sContext, BACKGROUND_COLOR);
     Graphics_clearDisplay(&g_sContext);
 
-    Graphics_setForegroundColor(
-        &g_sContext,
-        GRAPHICS_COLOR_RED
-    );
+    Graphics_setForegroundColor(&g_sContext, GRAPHICS_COLOR_RED);
+    Graphics_drawStringCentered(&g_sContext, (int8_t *)"BREAKOUT", AUTO_STRING_LENGTH, SCREEN_WIDTH / 2, 38, OPAQUE_TEXT);
 
-    Graphics_drawStringCentered(
-        &g_sContext,
-        (int8_t *)"BREAKOUT",
-        AUTO_STRING_LENGTH,
-        SCREEN_WIDTH / 2,
-        38,
-        OPAQUE_TEXT
-    );
+    Graphics_setForegroundColor(&g_sContext, GRAPHICS_COLOR_WHITE);
+    Graphics_drawStringCentered(&g_sContext, (int8_t *)"MSP430", AUTO_STRING_LENGTH, SCREEN_WIDTH / 2, 58, OPAQUE_TEXT);
 
-    Graphics_setForegroundColor(
-        &g_sContext,
-        GRAPHICS_COLOR_WHITE
-    );
-
-    Graphics_drawStringCentered(
-        &g_sContext,
-        (int8_t *)"MSP430",
-        AUTO_STRING_LENGTH,
-        SCREEN_WIDTH / 2,
-        58,
-        OPAQUE_TEXT
-    );
-
-    Graphics_setForegroundColor(
-        &g_sContext,
-        GRAPHICS_COLOR_YELLOW
-    );
-
-    Graphics_drawStringCentered(
-        &g_sContext,
-        (int8_t *)"S2 TO START",
-        AUTO_STRING_LENGTH,
-        SCREEN_WIDTH / 2,
-        86,
-        OPAQUE_TEXT
-    );
+    Graphics_setForegroundColor(&g_sContext, GRAPHICS_COLOR_YELLOW);
+    Graphics_drawStringCentered(&g_sContext, (int8_t *)"S2 TO START", AUTO_STRING_LENGTH, SCREEN_WIDTH / 2, 86, OPAQUE_TEXT);
 }
 
 
@@ -1101,63 +933,25 @@ void drawGame(void)
 {
     unsigned int i;
 
-    Graphics_setBackgroundColor(
-        &g_sContext,
-        BACKGROUND_COLOR
-    );
-
+    Graphics_setBackgroundColor(&g_sContext, BACKGROUND_COLOR);
     Graphics_clearDisplay(&g_sContext);
 
-    // Draw bricks
     for (i = 0; i < NUM_BRICKS; i++)
     {
         if (bricks[i].active)
         {
-            Graphics_setForegroundColor(
-                &g_sContext,
-                getBrickColor(i)
-            );
-
-            Graphics_fillRectangle(
-                &g_sContext,
-                &bricks[i].rect
-            );
+            Graphics_setForegroundColor(&g_sContext, getBrickColor(i));
+            Graphics_fillRectangle(&g_sContext, &bricks[i].rect);
         }
     }
 
     drawPaddle();
     drawBall(ball_x, ball_y);
 
-    Graphics_setForegroundColor(
-        &g_sContext,
-        STATUS_COLOR
-    );
-
-    Graphics_drawLine(
-        &g_sContext,
-        0,
-        STATUS_LINE_Y,
-        SCREEN_WIDTH - 1,
-        STATUS_LINE_Y
-    );
-
-    Graphics_drawString(
-        &g_sContext,
-        (int8_t *)"Lives:",
-        AUTO_STRING_LENGTH,
-        2,
-        119,
-        OPAQUE_TEXT
-    );
-
-    Graphics_drawString(
-        &g_sContext,
-        (int8_t *)"L:",
-        AUTO_STRING_LENGTH,
-        106,
-        119,
-        OPAQUE_TEXT
-    );
+    Graphics_setForegroundColor(&g_sContext, STATUS_COLOR);
+    Graphics_drawLine(&g_sContext, 0, STATUS_LINE_Y, SCREEN_WIDTH - 1, STATUS_LINE_Y);
+    Graphics_drawString(&g_sContext, (int8_t *)"Lives:", AUTO_STRING_LENGTH, 2, 119, OPAQUE_TEXT);
+    Graphics_drawString(&g_sContext, (int8_t *)"L:", AUTO_STRING_LENGTH, 106, 119, OPAQUE_TEXT);
 
     drawLives();
     drawLevel();
@@ -1167,53 +961,26 @@ void drawGame(void)
 // Draw lives
 void drawLives(void)
 {
-    Graphics_Rectangle area = {
-        42, 118, 82, 127
-    };
+    Graphics_Rectangle area = {42, 118, 82, 127};
 
-    Graphics_setForegroundColor(
-        &g_sContext,
-        BACKGROUND_COLOR
-    );
+    Graphics_setForegroundColor(&g_sContext, BACKGROUND_COLOR);
+    Graphics_fillRectangle(&g_sContext, &area);
 
-    Graphics_fillRectangle(
-        &g_sContext,
-        &area
-    );
-
-    Graphics_setForegroundColor(
-        &g_sContext,
-        STATUS_COLOR
-    );
+    Graphics_setForegroundColor(&g_sContext, STATUS_COLOR);
 
     if (lives >= 1)
     {
-        Graphics_fillCircle(
-            &g_sContext,
-            50,
-            123,
-            2
-        );
+        Graphics_fillCircle(&g_sContext, 50, 123, 2);
     }
 
     if (lives >= 2)
     {
-        Graphics_fillCircle(
-            &g_sContext,
-            61,
-            123,
-            2
-        );
+        Graphics_fillCircle(&g_sContext, 61, 123, 2);
     }
 
     if (lives >= 3)
     {
-        Graphics_fillCircle(
-            &g_sContext,
-            72,
-            123,
-            2
-        );
+        Graphics_fillCircle(&g_sContext, 72, 123, 2);
     }
 }
 
@@ -1221,75 +988,33 @@ void drawLives(void)
 // Draw level
 void drawLevel(void)
 {
-    Graphics_Rectangle area = {
-        118, 118, 127, 127
-    };
-
+    Graphics_Rectangle area = {118, 118, 127, 127};
     int8_t levelText[2];
 
     levelText[0] = '0' + currentLevel;
     levelText[1] = '\0';
 
-    Graphics_setForegroundColor(
-        &g_sContext,
-        BACKGROUND_COLOR
-    );
+    Graphics_setForegroundColor(&g_sContext, BACKGROUND_COLOR);
+    Graphics_fillRectangle(&g_sContext, &area);
 
-    Graphics_fillRectangle(
-        &g_sContext,
-        &area
-    );
-
-    Graphics_setForegroundColor(
-        &g_sContext,
-        STATUS_COLOR
-    );
-
-    Graphics_drawString(
-        &g_sContext,
-        levelText,
-        AUTO_STRING_LENGTH,
-        119,
-        119,
-        OPAQUE_TEXT
-    );
+    Graphics_setForegroundColor(&g_sContext, STATUS_COLOR);
+    Graphics_drawString(&g_sContext, levelText, AUTO_STRING_LENGTH, 119, 119, OPAQUE_TEXT);
 }
 
 
-// Draw end screen
+// End screen
 void drawEndMessage(const int8_t *message)
 {
-    Graphics_setBackgroundColor(
-        &g_sContext,
-        BACKGROUND_COLOR
-    );
+    Graphics_setBackgroundColor(&g_sContext, BACKGROUND_COLOR);
+    Graphics_clearDisplay(&g_sContext);
 
-    Graphics_setForegroundColor(
-        &g_sContext,
-        STATUS_COLOR
-    );
-
-    Graphics_drawStringCentered(
-        &g_sContext,
-        (int8_t *)message,
-        AUTO_STRING_LENGTH,
-        SCREEN_WIDTH / 2,
-        52,
-        OPAQUE_TEXT
-    );
-
-    Graphics_drawStringCentered(
-        &g_sContext,
-        (int8_t *)"Press S2",
-        AUTO_STRING_LENGTH,
-        SCREEN_WIDTH / 2,
-        70,
-        OPAQUE_TEXT
-    );
+    Graphics_setForegroundColor(&g_sContext, STATUS_COLOR);
+    Graphics_drawStringCentered(&g_sContext, (int8_t *)message, AUTO_STRING_LENGTH, SCREEN_WIDTH / 2, 52, OPAQUE_TEXT);
+    Graphics_drawStringCentered(&g_sContext, (int8_t *)"Press S2", AUTO_STRING_LENGTH, SCREEN_WIDTH / 2, 70, OPAQUE_TEXT);
 }
 
 
-// Get brick color
+// Brick color
 uint32_t getBrickColor(unsigned int brickIndex)
 {
     unsigned int row;
